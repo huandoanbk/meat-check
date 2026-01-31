@@ -8,9 +8,7 @@ export async function getWorker(): Promise<Worker> {
   if (workerInstance) return workerInstance;
   if (!workerPromise) {
     workerPromise = (async () => {
-      const worker = await createWorker({
-        logger: () => {},
-      });
+      const worker = await createWorker();
       await worker.loadLanguage(LANG);
       await worker.initialize(LANG);
       await worker.setParameters({
