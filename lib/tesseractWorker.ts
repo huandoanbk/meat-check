@@ -10,11 +10,13 @@ export async function getWorker(): Promise<Worker> {
     workerPromise = (async () => {
       try {
         type FullWorker = Worker & {
+          load: () => Promise<void>;
           loadLanguage: (lang: string) => Promise<void>;
           initialize: (lang: string) => Promise<void>;
           setParameters: (params: Record<string, unknown>) => Promise<void>;
         };
         const worker = (await createWorker()) as FullWorker;
+        await worker.load();
         await worker.loadLanguage(LANG);
         await worker.initialize(LANG);
         await worker.setParameters({
