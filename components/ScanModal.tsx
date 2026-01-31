@@ -47,6 +47,7 @@ export function ScanModal({
     }
     startCamera();
     return () => cleanupStream();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const resetState = () => {
@@ -76,14 +77,35 @@ export function ScanModal({
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        await ensureVideoPlaying();
       }
     } catch (err) {
       const message =
         err instanceof Error
           ? err.message
-          : "Không thể mở camera. Vui lòng kiểm tra quyền truy cập.";
+          : "Camera permission denied or unavailable.";
       setError(message);
+    }
+  };
+
+  const ensureVideoPlaying = async () => {
+    const video = videoRef.current;
+    if (!video || !video.srcObject) return;
+    if (video.readyState < 2 || video.videoWidth === 0) {
+      await new Promise<void>((resolve) => {
+        const onReady = () => {
+          video.removeEventListener("loadedmetadata", onReady);
+          video.removeEventListener("canplay", onReady);
+          resolve();
+        };
+        video.addEventListener("loadedmetadata", onReady, { once: true });
+        video.addEventListener("canplay", onReady, { once: true });
+      });
+    }
+    try {
+      await video.play();
+    } catch {
+      // ignore play errors (e.g., user gesture required on some browsers)
     }
   };
 
@@ -107,6 +129,7 @@ export function ScanModal({
     setLoading(true);
     setError(null);
     try {
+      await ensureVideoPlaying();
       const blob = await captureFrame(videoRef.current);
       const formData = new FormData();
       formData.append("image", blob, "scan.jpg");
@@ -141,79 +164,94 @@ export function ScanModal({
 
   const captureFrame = (video: HTMLVideoElement): Promise<Blob> =>
     new Promise((resolve, reject) => {
-      const { videoWidth, videoHeight } = video;
-      if (!videoWidth || !videoHeight) {
-        reject(new Error("Camera chưa sẵn sàng."));
-        return;
-      }
-
-      const roiWidth = videoWidth * ROI_WIDTH_RATIO;
-      const roiHeight = videoHeight * ROI_HEIGHT_RATIO;
-      const roiX = (videoWidth - roiWidth) / 2;
-      const roiY = (videoHeight - roiHeight) / 2;
-
-      const cropCanvas = document.createElement("canvas");
-      cropCanvas.width = roiWidth;
-      cropCanvas.height = roiHeight;
-      const ctx = cropCanvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("Canvas không khả dụng."));
-        return;
-      }
-      ctx.drawImage(
-        video,
-        roiX,
-        roiY,
-        roiWidth,
-        roiHeight,
-        0,
-        0,
-        roiWidth,
-        roiHeight
-      );
-
-      let targetCanvas = cropCanvas;
-      if (roiWidth > MAX_UPLOAD_WIDTH) {
-        const scale = MAX_UPLOAD_WIDTH / roiWidth;
-        const scaled = document.createElement("canvas");
-        scaled.width = MAX_UPLOAD_WIDTH;
-        scaled.height = roiHeight * scale;
-        const sctx = scaled.getContext("2d");
-        if (!sctx) {
-          reject(new Error("Canvas không khả dụng."));
-          return;
+      const ensureReady = async () => {
+        if (video.videoWidth === 0 || video.readyState < 2) {
+          await new Promise<void>((res) => {
+            const onReady = () => {
+              video.removeEventListener("loadedmetadata", onReady);
+              video.removeEventListener("canplay", onReady);
+              res();
+            };
+            video.addEventListener("loadedmetadata", onReady, { once: true });
+            video.addEventListener("canplay", onReady, { once: true });
+          });
         }
-        sctx.drawImage(cropCanvas, 0, 0, scaled.width, scaled.height);
-        targetCanvas = scaled;
-      }
+      };
 
-      targetCanvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            reject(new Error("Không thể tạo ảnh."));
-            return;
+      ensureReady()
+        .then(() => {
+          const { videoWidth, videoHeight } = video;
+          if (!videoWidth || !videoHeight) {
+            throw new Error("Camera not ready.");
           }
-          resolve(blob);
-        },
-        "image/jpeg",
-        0.8
-      );
+
+          const roiWidth = videoWidth * ROI_WIDTH_RATIO;
+          const roiHeight = videoHeight * ROI_HEIGHT_RATIO;
+          const roiX = (videoWidth - roiWidth) / 2;
+          const roiY = (videoHeight - roiHeight) / 2;
+
+          const cropCanvas = document.createElement("canvas");
+          cropCanvas.width = roiWidth;
+          cropCanvas.height = roiHeight;
+          const ctx = cropCanvas.getContext("2d");
+          if (!ctx) {
+            throw new Error("Canvas unavailable.");
+          }
+          ctx.drawImage(
+            video,
+            roiX,
+            roiY,
+            roiWidth,
+            roiHeight,
+            0,
+            0,
+            roiWidth,
+            roiHeight
+          );
+
+          let targetCanvas = cropCanvas;
+          if (roiWidth > MAX_UPLOAD_WIDTH) {
+            const scale = MAX_UPLOAD_WIDTH / roiWidth;
+            const scaled = document.createElement("canvas");
+            scaled.width = MAX_UPLOAD_WIDTH;
+            scaled.height = roiHeight * scale;
+            const sctx = scaled.getContext("2d");
+            if (!sctx) {
+              throw new Error("Canvas unavailable.");
+            }
+            sctx.drawImage(cropCanvas, 0, 0, scaled.width, scaled.height);
+            targetCanvas = scaled;
+          }
+
+          targetCanvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                reject(new Error("Could not create image."));
+                return;
+              }
+              resolve(blob);
+            },
+            "image/jpeg",
+            0.8
+          );
+        })
+        .catch((err) => reject(err));
     });
 
   const handleConfirm = () => {
     const kg = parseFloat(kgInput);
     if (!selectedProductId) {
-      setError("Vui lòng chọn sản phẩm.");
+      setError("Please select a product.");
       return;
     }
     if (!Number.isFinite(kg) || kg <= 0 || kg < 0.05 || kg > 50) {
-      setError("Khối lượng không hợp lệ (0.05 - 50 kg).");
+      setError("Weight is invalid (0.05 - 50 kg).");
       return;
     }
 
     const product = products.find((p) => p.id === selectedProductId);
     if (!product) {
-      setError("Sản phẩm không hợp lệ.");
+      setError("Invalid product.");
       return;
     }
 
@@ -239,149 +277,156 @@ export function ScanModal({
 
   if (!open) return null;
 
+  const confirmOverlay = (
+    <div className="absolute inset-0 bg-gray-950/95 px-4 py-6 overflow-y-auto">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Confirm</h2>
+        <div className="flex gap-2">
+          <button
+            className="rounded-md bg-gray-800 px-3 py-2 text-sm"
+            onClick={async () => {
+              clearConfirmState();
+              setError(null);
+              setMode("camera");
+              await ensureVideoPlaying();
+            }}
+          >
+            Rescan
+          </button>
+          <button
+            className="rounded-md bg-gray-800 px-3 py-2 text-sm"
+            onClick={handleClose}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <p className="mb-3 rounded bg-red-600/80 px-3 py-2 text-sm">
+          {error}
+        </p>
+      )}
+
+      <label className="mb-3 block text-sm">
+        Product
+        <select
+          className="mt-1 w-full rounded-md bg-gray-800 px-3 py-2 text-white"
+          value={selectedProductId}
+          onChange={(e) => setSelectedProductId(e.target.value)}
+        >
+          <option value="">Select a product</option>
+          {products.map((p) => {
+            const label = p.id ? `[${p.id}] ${p.name}` : p.name;
+            return (
+              <option key={p.id} value={p.id}>
+                {label}
+              </option>
+            );
+          })}
+        </select>
+      </label>
+
+      <label className="mb-3 block text-sm">
+        Weight (kg)
+        <input
+          type="number"
+          step="0.001"
+          inputMode="decimal"
+          className="mt-1 w-full rounded-md bg-gray-800 px-3 py-2 text-white"
+          value={kgInput}
+          onChange={(e) => setKgInput(e.target.value)}
+          placeholder="Enter weight"
+        />
+      </label>
+
+      <div className="mb-4">
+        <button
+          className="text-sm text-emerald-300 underline"
+          onClick={() => setShowText((v) => !v)}
+        >
+          {showText ? "Hide OCR text" : "Show OCR text"}
+        </button>
+        {showText && (
+          <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-gray-900 px-3 py-2 text-xs whitespace-pre-wrap">
+            {ocrText || "(empty)"}
+          </pre>
+        )}
+      </div>
+
+      <div className="flex gap-3">
+        <button
+          className="flex-1 rounded-md bg-gray-800 px-4 py-3 text-white"
+          onClick={async () => {
+            clearConfirmState();
+            setError(null);
+            setMode("camera");
+            await ensureVideoPlaying();
+          }}
+        >
+          Rescan
+        </button>
+        <button
+          className="flex-1 rounded-md bg-emerald-500 px-4 py-3 text-white"
+          onClick={handleConfirm}
+        >
+          Confirm
+        </button>
+      </div>
+    </div>
+  );
+
+  const cameraOverlay = (
+    <div className="absolute inset-0 flex flex-col justify-between p-4">
+      <div>
+        <p className="text-sm text-white/80">
+          Place the label inside the box, then tap Scan.
+        </p>
+        {error && (
+          <p className="mt-2 rounded bg-red-600/80 px-3 py-2 text-sm">
+            {error}
+          </p>
+        )}
+      </div>
+      <div className="flex gap-3">
+        <button
+          className="flex-1 rounded-md bg-white px-4 py-3 text-black"
+          onClick={handleClose}
+        >
+          Close
+        </button>
+        <button
+          className="flex-1 rounded-md bg-emerald-500 px-4 py-3 text-white disabled:bg-emerald-800"
+          onClick={handleScan}
+          disabled={loading}
+        >
+          {loading ? "Reading label…" : "Scan"}
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 z-50 bg-black/70 text-white">
       <div className="relative h-full w-full">
-        {mode === "camera" && (
-          <>
-            <video
-              ref={videoRef}
-              className="h-full w-full object-cover"
-              playsInline
-              muted
-              autoPlay
-            />
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div
-                className="border-2 border-emerald-400/90 rounded-lg bg-black/10"
-                style={{
-                  width: `${ROI_WIDTH_RATIO * 100}%`,
-                  height: `${ROI_HEIGHT_RATIO * 100}%`,
-                }}
-              />
-            </div>
-            <div className="absolute inset-0 flex flex-col justify-between p-4">
-              <div>
-                <p className="text-sm text-white/80">
-                  Đưa label vào khung rồi bấm Scan
-                </p>
-                {error && (
-                  <p className="mt-2 rounded bg-red-600/80 px-3 py-2 text-sm">
-                    {error}
-                  </p>
-                )}
-              </div>
-              <div className="flex gap-3">
-                <button
-                  className="flex-1 rounded-md bg-white px-4 py-3 text-black"
-                  onClick={handleClose}
-                >
-                  Close
-                </button>
-                <button
-                  className="flex-1 rounded-md bg-emerald-500 px-4 py-3 text-white disabled:bg-emerald-800"
-                  onClick={handleScan}
-                  disabled={loading}
-                >
-                  {loading ? "Đang đọc label…" : "Scan"}
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-
-        {mode === "confirm" && (
-          <div className="absolute inset-0 bg-gray-950 px-4 py-6 overflow-y-auto">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Xác nhận</h2>
-              <div className="flex gap-2">
-                <button
-                  className="rounded-md bg-gray-800 px-3 py-2 text-sm"
-                  onClick={() => {
-                    clearConfirmState();
-                    setError(null);
-                    setMode("camera");
-                  }}
-                >
-                  Rescan
-                </button>
-                <button
-                  className="rounded-md bg-gray-800 px-3 py-2 text-sm"
-                  onClick={handleClose}
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-
-            {error && (
-              <p className="mb-3 rounded bg-red-600/80 px-3 py-2 text-sm">
-                {error}
-              </p>
-            )}
-
-            <label className="mb-3 block text-sm">
-              Product
-              <select
-                className="mt-1 w-full rounded-md bg-gray-800 px-3 py-2 text-white"
-                value={selectedProductId}
-                onChange={(e) => setSelectedProductId(e.target.value)}
-              >
-                <option value="">Chọn sản phẩm</option>
-                {products.map((p) => {
-                  const label = p.id ? `[${p.id}] ${p.name}` : p.name;
-                  return (
-                    <option key={p.id} value={p.id}>
-                      {label}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-
-            <label className="mb-3 block text-sm">
-              Khối lượng (kg)
-              <input
-                type="number"
-                step="0.001"
-                inputMode="decimal"
-                className="mt-1 w-full rounded-md bg-gray-800 px-3 py-2 text-white"
-                value={kgInput}
-                onChange={(e) => setKgInput(e.target.value)}
-                placeholder="Nhập kg"
-              />
-            </label>
-
-            <div className="mb-4">
-              <button
-                className="text-sm text-emerald-300 underline"
-                onClick={() => setShowText((v) => !v)}
-              >
-                {showText ? "Ẩn OCR text" : "Xem OCR text"}
-              </button>
-              {showText && (
-                <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-gray-900 px-3 py-2 text-xs whitespace-pre-wrap">
-                  {ocrText || "(trống)"}
-                </pre>
-              )}
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                className="flex-1 rounded-md bg-gray-800 px-4 py-3 text-white"
-                onClick={() => setMode("camera")}
-              >
-                Rescan
-              </button>
-              <button
-                className="flex-1 rounded-md bg-emerald-500 px-4 py-3 text-white"
-                onClick={handleConfirm}
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        )}
+        <video
+          ref={videoRef}
+          className="h-full w-full object-cover"
+          playsInline
+          muted
+          autoPlay
+        />
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div
+            className="border-2 border-emerald-400/90 rounded-lg bg-black/10"
+            style={{
+              width: `${ROI_WIDTH_RATIO * 100}%`,
+              height: `${ROI_HEIGHT_RATIO * 100}%`,
+            }}
+          />
+        </div>
+        {mode === "camera" && cameraOverlay}
+        {mode === "confirm" && confirmOverlay}
       </div>
     </div>
   );
