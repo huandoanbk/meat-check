@@ -160,16 +160,18 @@ export function ScanModal({
       type RecognizeWithLogger = {
         recognize: (
           image: string,
-          options?: unknown,
-          config?: { logger?: (m: { progress?: number }) => void }
+          options?: unknown
         ) => Promise<{ data?: { text?: string } }>;
       };
       const w = worker as unknown as RecognizeWithLogger;
-      const result = await w.recognize(dataUrl, undefined, {
-        logger: (m) => {
-          if (m.progress !== undefined) setOcrProgress(m.progress);
-        },
-      });
+      const result = await w.recognize(
+        dataUrl,
+        {
+          logger: (m: { progress?: number }) => {
+            if (m.progress !== undefined) setOcrProgress(m.progress);
+          },
+        } as unknown
+      );
       const text: string = result?.data?.text || "";
       setOcrText(text);
 

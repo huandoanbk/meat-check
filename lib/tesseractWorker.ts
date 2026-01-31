@@ -8,9 +8,11 @@ export async function getWorker(): Promise<Worker> {
   if (workerInstance) return workerInstance;
   if (!workerPromise) {
     workerPromise = (async () => {
-      const worker = await createWorker(LANG, undefined, {
+      const worker = await createWorker({
         logger: () => {},
       });
+      await worker.loadLanguage(LANG);
+      await worker.initialize(LANG);
       await worker.setParameters({
         tessedit_pageseg_mode: PSM.SINGLE_BLOCK, // PSM 6
       });
