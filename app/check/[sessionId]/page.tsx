@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
 import { ScanModal } from "@/components/ScanModal";
 import { PRODUCTS } from "@/lib/products";
 import {
@@ -22,17 +22,16 @@ export default function SessionPage() {
   const [sessions, setSessions] = useState<InventorySession[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setSessions(loadSessions());
     setHydrated(true);
   }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
   const [openScan, setOpenScan] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [manualProductId, setManualProductId] = useState("");
   const [manualKg, setManualKg] = useState("");
   const [toast, setToast] = useState<string | null>(null);
+  const [showReportMenu, setShowReportMenu] = useState(false);
 
   const session = useMemo(
     () => sessions.find((s) => s.id === sessionId),
@@ -79,6 +78,12 @@ export default function SessionPage() {
     return Array.from(map.values());
   }, [session]);
 
+  const buildSummaryLines = () =>
+    summary.map((s) => {
+      const label = s.productId ? `[${s.productId}] ${s.productName}` : s.productName;
+      return `${label}: ${s.totalKg.toFixed(3)} kg (${s.count})`;
+    });
+
   const handleManualAdd = () => {
     if (!session) return;
     const kg = parseFloat(manualKg.replace(",", "."));
@@ -96,21 +101,73 @@ export default function SessionPage() {
     setShowManual(false);
   };
 
-  const handleCopyReport = async () => {
-    if (!session || !summary.length) return;
-    const lines = summary.map((s) => {
-      const label = s.productId ? `[${s.productId}] ${s.productName}` : s.productName;
-      return `${label}: ${s.totalKg.toFixed(3)} kg (${s.count})`;
-    });
-    const text = [`Session: ${session.name}`, "Summary:", ...lines].join("\n");
+  const sanitizeFilename = (name: string, ext: string) => {
+    const safe = name.replace(/[<>:"/\\|?*\r\n]+/g, "_").trim() || "report";
+    return `${safe}.${ext}`;
+  };
+
+  const copySummary = async () => {
+    if (!summary.length) return;
+    const lines = buildSummaryLines();
     try {
-      await navigator.clipboard.writeText(text);
-      setToast("Report copied");
-      setTimeout(() => setToast(null), 2000);
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setToast("Copied");
     } catch {
       setToast("Failed to copy");
+    } finally {
+      setShowReportMenu(false);
       setTimeout(() => setToast(null), 2000);
     }
+  };
+
+  const exportCsv = () => {
+    if (!session || !summary.length) return;
+    const rows = [["product_id", "product_name", "total_kg", "record_count"]];
+    summary.forEach((s) => {
+      rows.push([
+        s.productId,
+        s.productName,
+        s.totalKg.toFixed(3),
+        String(s.count),
+      ]);
+    });
+    const csv = rows.map((r) => r.map((v) => `"${v.replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = sanitizeFilename(session.name, "csv");
+    link.click();
+    URL.revokeObjectURL(url);
+    setShowReportMenu(false);
+    setToast("CSV exported");
+    setTimeout(() => setToast(null), 2000);
+  };
+
+  const exportPdf = async () => {
+    if (!session || !summary.length) return;
+    const { jsPDF } = await import("jspdf");
+    const autoTable = (await import("jspdf-autotable")).default;
+    const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+    doc.setFontSize(14);
+    doc.text(`Session: ${session.name}`, 40, 40);
+    const head = [["Product", "Total (kg)", "Count"]];
+    const body = summary.map((s) => [
+      s.productId ? `[${s.productId}] ${s.productName}` : s.productName,
+      s.totalKg.toFixed(3),
+      String(s.count),
+    ]);
+    autoTable(doc, {
+      head,
+      body,
+      startY: 60,
+      styles: { fontSize: 10 },
+      headStyles: { fillColor: [79, 70, 229] },
+    });
+    doc.save(sanitizeFilename(session.name, "pdf"));
+    setShowReportMenu(false);
+    setToast("PDF exported");
+    setTimeout(() => setToast(null), 2000);
   };
 
   if (!hydrated) {
@@ -149,32 +206,65 @@ export default function SessionPage() {
           >
             ← Back
           </button>
-          <Link
-            href="/"
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          >
-            Home
-          </Link>
           <div className="text-lg font-semibold">{session.name}</div>
           <div className="ml-auto flex gap-2">
             <button
-              className="rounded-md bg-emerald-500 px-3 py-2 text-white shadow-sm"
+              className="rounded-md bg-emerald-500 px-6 py-3 text-white shadow-sm flex-1 min-w-[140px]"
               onClick={() => setOpenScan(true)}
             >
               Scan
             </button>
             <button
-              className="rounded-md bg-slate-900 px-3 py-2 text-white shadow-sm"
+              className="rounded-md bg-slate-900 px-3 py-3 text-white shadow-sm"
               onClick={() => setShowManual((v) => !v)}
             >
               + Add manual
             </button>
-            <button
-              className="rounded-md bg-indigo-500 px-3 py-2 text-white shadow-sm"
-              onClick={handleCopyReport}
-            >
-              Report
-            </button>
+            <div className="relative">
+              <button
+                className="rounded-md bg-indigo-500 px-3 py-3 text-white shadow-sm h-full"
+                onClick={() => setShowReportMenu(true)}
+              >
+                Report
+              </button>
+              {showReportMenu && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowReportMenu(false)}
+                  />
+                  <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white text-slate-900 shadow-lg">
+                    <button
+                      className="block w-full px-4 py-3 text-left text-sm hover:bg-slate-100"
+                      onClick={() => {
+                        copySummary();
+                        setShowReportMenu(false);
+                      }}
+                    >
+                      Copy summary
+                    </button>
+                    <button
+                      className="block w-full px-4 py-3 text-left text-sm hover:bg-slate-100"
+                      onClick={() => {
+                        exportCsv();
+                        setShowReportMenu(false);
+                      }}
+                    >
+                      Export CSV
+                    </button>
+                    <button
+                      className="block w-full px-4 py-3 text-left text-sm hover:bg-slate-100"
+                      onClick={() => {
+                        exportPdf();
+                        setShowReportMenu(false);
+                      }}
+                    >
+                      Export PDF
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </header>
 
@@ -243,8 +333,7 @@ export default function SessionPage() {
                 const label = s.productId ? `[${s.productId}] ${s.productName}` : s.productName;
                 return (
                   <div key={s.productId || s.productName} className="text-sm">
-                    <span className="font-semibold">{label}</span> —{" "}
-                    {s.totalKg.toFixed(3)} kg ({s.count})
+                    {label}: {s.totalKg.toFixed(3)} kg ({s.count})
                   </div>
                 );
               })}

@@ -7,42 +7,42 @@ export type Product = {
 export const PRODUCTS: Product[] = [
   {
     id: "10550",
-    name: "SIANPÄÄ 新鲜猪头",
+    name: "SIANPÄÄ",
     keywords: ["SIANPÄÄ"],
   },
   {
     id: "10567",
-    name: "SIAN MAKSA 新鲜猪肝",
+    name: "SIAN MAKSA",
     keywords: ["MAKSA"],
   },
   {
     id: "10568",
-    name: "PORSAAN SYDÄN 新鲜猪心",
+    name: "PORSAAN SYDÄN",
     keywords: ["SYDÄN"],
   },
     {
     id: "10569",
-    name: "SIAN KIELI 新鲜猪舌",
+    name: "SIAN KIELI",
     keywords: ["KIELI"],
   },
     {
     id: "10570",
-    name: "SORKKA 新鲜猪蹄",
+    name: "SORKKA",
     keywords: ["SORKKA"],
   },
     {
     id: "10572",
-    name: "S-KYLKI LUUTON 新鲜五花肉",
+    name: "S-KYLKI LUUTON",
     keywords: ["LUUTON"],
   },
     {
     id: "10574",
-    name: "新鲜猪肘 SIAN ETUPOTKA",
+    name: "SIAN ETUPOTKA",
     keywords: ["ETUPOTKA"],
   },
     {
     id: "10584",
-    name: "新鲜筒骨LUUT II (Jalkalui LUUT",
+    name: "LUUT II (Jalkalui LUUT)",
     keywords: ["Jalkalui"],
   },
     {
@@ -52,19 +52,38 @@ export const PRODUCTS: Product[] = [
   },
     {
     id: "10794",
-    name: "Etupään Rusto /kg | 新鲜猪骨",
+    name: "Etupään Rusto",
     keywords: ["Etupää"],
   },
     {
     id: "10795",
-    name: "Porsaan Kolmioluu /kg | 猪肋排",
+    name: "Porsaan Kolmioluu",
     keywords: ["Kolmioluu"],
   },
     {
     id: "10797",
-    name: "S-Rankaluu  /kg | 猪脊骨",
+    name: "S-Rankaluu",
     keywords: ["Rankaluu"],
   },
-
+    {
+    id: "10793",
+    name: "Ulkofile",
+    keywords: ["Ulkofile"],
+  },
+  {
+    id: "10796",
+    name: "Porsaan kyljysrivi",
+    keywords: ["kyljysrivi"],
+  },
+  {
+    id: "10792",
+    name: "Sian munuainen",
+    keywords: ["munuainen"],
+  },
+  {
+    id: "10798",
+    name: "Silava",
+    keywords: ["Silava"],
+  },
   // TODO: Add ~15 total products with 1–2 simple keywords each for OCR matching.
 ];

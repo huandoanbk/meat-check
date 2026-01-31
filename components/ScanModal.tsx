@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createWorker, PSM, type Worker } from "tesseract.js";
 import { matchProduct, normalizeText } from "@/lib/match";
 import type { Product } from "@/lib/products";
+import { getWorker, terminateWorker } from "@/lib/tesseractWorker";
 
 type ScanModalProps = {
   open: boolean;
@@ -33,7 +33,6 @@ export function ScanModal({
 }: ScanModalProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const workerRef = useRef<Worker | null>(null);
   const [mode, setMode] = useState<Mode>("camera");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +41,7 @@ export function ScanModal({
   const [kgInput, setKgInput] = useState<string>("");
   const [showText, setShowText] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
+  const [workerReady, setWorkerReady] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -51,7 +51,7 @@ export function ScanModal({
       return;
     }
     startCamera();
-    initWorker();
+    preloadWorker();
     return () => {
       cleanupStream();
       terminateWorker();
@@ -97,27 +97,15 @@ export function ScanModal({
     }
   };
 
-  const initWorker = async () => {
-    if (workerRef.current) return;
+  const preloadWorker = async () => {
+    setWorkerReady(false);
     try {
-      const worker = await createWorker("fin+swe", undefined, {
-        logger: (m) => {
-          if (m.progress !== undefined) setOcrProgress(m.progress);
-        },
-      });
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_BLOCK, // PSM 6
-      });
-      workerRef.current = worker;
+      const worker = await getWorker();
+      // Attach logger only once here for progress during recognize
+      // We'll pass a logger in recognize call instead of global logger in singleton.
+      if (worker) setWorkerReady(true);
     } catch {
       setError("Failed to initialize OCR.");
-    }
-  };
-
-  const terminateWorker = async () => {
-    if (workerRef.current) {
-      await workerRef.current.terminate();
-      workerRef.current = null;
     }
   };
 
@@ -165,15 +153,15 @@ export function ScanModal({
       await ensureVideoPlaying();
       const dataUrl = await captureAndProcess(videoRef.current);
 
-      if (!workerRef.current) {
-        await initWorker();
-      }
-      if (!workerRef.current) {
-        throw new Error("OCR worker unavailable.");
-      }
+      const worker = await getWorker();
+      if (!worker) throw new Error("OCR worker unavailable.");
 
       setOcrProgress(0);
-      const result = await workerRef.current.recognize(dataUrl);
+      const result = await worker.recognize(dataUrl, {
+        logger: (m) => {
+          if (m.progress !== undefined) setOcrProgress(m.progress);
+        },
+      });
       const text: string = result?.data?.text || "";
       setOcrText(text);
 
@@ -467,11 +455,13 @@ export function ScanModal({
         <button
           className="flex-1 rounded-md bg-emerald-500 px-4 py-3 text-white disabled:bg-emerald-800"
           onClick={handleScan}
-          disabled={loading}
+          disabled={loading || !workerReady}
         >
           {loading
             ? `Reading label… ${Math.round(ocrProgress * 100)}%`
-            : "Scan"}
+            : workerReady
+              ? "Scan"
+              : "Preparing OCR…"}
         </button>
       </div>
     </div>

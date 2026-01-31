@@ -37,7 +37,7 @@ export default function HomePage() {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <main className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8">
         <header className="flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-semibold">Inventory Check</h1>
+          <h1 className="text-2xl font-semibold">Fresh Meat Check</h1>
           <button
             className="rounded-lg bg-emerald-500 px-4 py-3 text-lg font-semibold text-white shadow-sm hover:bg-emerald-600"
             onClick={handleCreate}
