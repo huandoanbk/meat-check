@@ -20,8 +20,8 @@ type ScanModalProps = {
 
 type Mode = "camera" | "confirm";
 
-const ROI_WIDTH_RATIO = 0.8;
-const ROI_HEIGHT_RATIO = 0.25;
+const ROI_WIDTH_RATIO = 0.95;
+const ROI_HEIGHT_RATIO = 0.5;
 const MAX_UPLOAD_WIDTH = 800;
 const SCALE_UP = 2;
 

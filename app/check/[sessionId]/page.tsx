@@ -211,6 +211,7 @@ export default function SessionPage() {
                   onChange={(e) => setManualKg(e.target.value)}
                   placeholder="0.000"
                   inputMode="decimal"
+                  style={{ fontSize: "16px" }}
                 />
               </div>
               <div className="flex gap-2">
