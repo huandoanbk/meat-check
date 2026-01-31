@@ -90,8 +90,8 @@ export async function POST(req: NextRequest) {
       typeof message?.content === "string"
         ? message.content
         : Array.isArray(message?.content)
-          ? message.content
-              .map((part) => (part.type === "text" ? part.text : ""))
+          ? (message.content as Array<{ type: string; text?: string }>)
+              .map((part) => (part.type === "text" ? part.text ?? "" : ""))
               .filter(Boolean)
               .join("\n")
           : "";
