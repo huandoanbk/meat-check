@@ -8,14 +8,24 @@ export async function getWorker(): Promise<Worker> {
   if (workerInstance) return workerInstance;
   if (!workerPromise) {
     workerPromise = (async () => {
-      const worker = await createWorker();
-      await worker.loadLanguage(LANG);
-      await worker.initialize(LANG);
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_BLOCK, // PSM 6
-      });
-      workerInstance = worker;
-      return worker;
+      try {
+        type FullWorker = Worker & {
+          loadLanguage: (lang: string) => Promise<void>;
+          initialize: (lang: string) => Promise<void>;
+          setParameters: (params: Record<string, unknown>) => Promise<void>;
+        };
+        const worker = (await createWorker()) as FullWorker;
+        await worker.loadLanguage(LANG);
+        await worker.initialize(LANG);
+        await worker.setParameters({
+          tessedit_pageseg_mode: PSM.SINGLE_BLOCK, // PSM 6
+        });
+        workerInstance = worker;
+        return worker;
+      } catch (err) {
+        workerPromise = null; // allow retry on failure
+        throw err;
+      }
     })();
   }
   workerInstance = await workerPromise;
