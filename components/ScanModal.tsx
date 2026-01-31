@@ -157,7 +157,15 @@ export function ScanModal({
       if (!worker) throw new Error("OCR worker unavailable.");
 
       setOcrProgress(0);
-      const result = await worker.recognize(dataUrl, {
+      type RecognizeWithLogger = {
+        recognize: (
+          image: string,
+          options?: unknown,
+          config?: { logger?: (m: { progress?: number }) => void }
+        ) => Promise<{ data?: { text?: string } }>;
+      };
+      const w = worker as unknown as RecognizeWithLogger;
+      const result = await w.recognize(dataUrl, undefined, {
         logger: (m) => {
           if (m.progress !== undefined) setOcrProgress(m.progress);
         },
