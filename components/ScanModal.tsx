@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createWorker, PSM, type Worker } from "tesseract.js";
 import { matchProduct, normalizeText } from "@/lib/match";
 import type { Product } from "@/lib/products";
 
@@ -22,6 +23,7 @@ type Mode = "camera" | "confirm";
 const ROI_WIDTH_RATIO = 0.8;
 const ROI_HEIGHT_RATIO = 0.25;
 const MAX_UPLOAD_WIDTH = 800;
+const SCALE_UP = 2;
 
 export function ScanModal({
   open,
@@ -31,6 +33,7 @@ export function ScanModal({
 }: ScanModalProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const workerRef = useRef<Worker | null>(null);
   const [mode, setMode] = useState<Mode>("camera");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,15 +41,21 @@ export function ScanModal({
   const [selectedProductId, setSelectedProductId] = useState<string>("");
   const [kgInput, setKgInput] = useState<string>("");
   const [showText, setShowText] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
 
   useEffect(() => {
     if (!open) {
       cleanupStream();
+      terminateWorker();
       resetState();
       return;
     }
     startCamera();
-    return () => cleanupStream();
+    initWorker();
+    return () => {
+      cleanupStream();
+      terminateWorker();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -85,6 +94,30 @@ export function ScanModal({
           ? err.message
           : "Camera permission denied or unavailable.";
       setError(message);
+    }
+  };
+
+  const initWorker = async () => {
+    if (workerRef.current) return;
+    try {
+      const worker = await createWorker("fin+swe", undefined, {
+        logger: (m) => {
+          if (m.progress !== undefined) setOcrProgress(m.progress);
+        },
+      });
+      await worker.setParameters({
+        tessedit_pageseg_mode: PSM.SINGLE_BLOCK, // PSM 6
+      });
+      workerRef.current = worker;
+    } catch {
+      setError("Failed to initialize OCR.");
+    }
+  };
+
+  const terminateWorker = async () => {
+    if (workerRef.current) {
+      await workerRef.current.terminate();
+      workerRef.current = null;
     }
   };
 
@@ -130,20 +163,18 @@ export function ScanModal({
     setError(null);
     try {
       await ensureVideoPlaying();
-      const blob = await captureFrame(videoRef.current);
-      const formData = new FormData();
-      formData.append("image", blob, "scan.jpg");
+      const dataUrl = await captureAndProcess(videoRef.current);
 
-      const res = await fetch("/api/ocr", {
-        method: "POST",
-        body: formData,
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "OCR failed");
+      if (!workerRef.current) {
+        await initWorker();
       }
-      const data = await res.json();
-      const text: string = data.text || "";
+      if (!workerRef.current) {
+        throw new Error("OCR worker unavailable.");
+      }
+
+      setOcrProgress(0);
+      const result = await workerRef.current.recognize(dataUrl);
+      const text: string = result?.data?.text || "";
       setOcrText(text);
 
       const matched = matchProduct(text, products);
@@ -237,6 +268,44 @@ export function ScanModal({
         })
         .catch((err) => reject(err));
     });
+
+  const captureAndProcess = async (video: HTMLVideoElement): Promise<string> => {
+    await ensureVideoPlaying();
+    const blob = await captureFrame(video);
+    const imageBitmap = await createImageBitmap(blob);
+
+    const baseWidth = imageBitmap.width;
+    const baseHeight = imageBitmap.height;
+
+    const scaledWidth = Math.min(MAX_UPLOAD_WIDTH, baseWidth * SCALE_UP);
+    const scale = scaledWidth / baseWidth;
+    const scaledHeight = baseHeight * scale;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = scaledWidth;
+    canvas.height = scaledHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas unavailable.");
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(imageBitmap, 0, 0, scaledWidth, scaledHeight);
+
+    const imageData = ctx.getImageData(0, 0, scaledWidth, scaledHeight);
+    const data = imageData.data;
+    // grayscale + simple threshold/contrast
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+      const boosted = Math.min(255, gray * 1.35);
+      const value = boosted > 160 ? 255 : 0;
+      data[i] = data[i + 1] = data[i + 2] = value;
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    return canvas.toDataURL("image/png");
+  };
 
   const handleConfirm = () => {
     const kg = parseFloat(kgInput);
@@ -400,7 +469,9 @@ export function ScanModal({
           onClick={handleScan}
           disabled={loading}
         >
-          {loading ? "Reading label…" : "Scan"}
+          {loading
+            ? `Reading label… ${Math.round(ocrProgress * 100)}%`
+            : "Scan"}
         </button>
       </div>
     </div>
