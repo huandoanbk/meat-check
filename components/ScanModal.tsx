@@ -76,6 +76,8 @@ export function ScanModal({
       resetState();
       return;
     }
+    // Unlock audio context as soon as modal opens (after user gesture that opened it)
+    void ensureAudioContext();
     startCamera();
     initWorker();
     return () => {
