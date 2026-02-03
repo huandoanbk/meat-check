@@ -1,12 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  createWorker,
-  PSM,
-  type Worker as TesseractWorker,
-  type LoggerMessage,
-} from "tesseract.js";
+import { recognize, PSM, type LoggerMessage } from "tesseract.js";
 import { matchProduct, normalizeText } from "@/lib/match";
 import type { Product } from "@/lib/products";
 
@@ -38,8 +33,7 @@ export function ScanModal({
 }: ScanModalProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const workerRef = useRef<TesseractWorker | null>(null);
-  const [workerReady, setWorkerReady] = useState(false);
+  const [workerReady, setWorkerReady] = useState(true);
   const [mode, setMode] = useState<Mode>("camera");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,32 +113,7 @@ export function ScanModal({
   };
 
   const initWorker = async () => {
-    if (workerRef.current) return;
-    try {
-      type FullWorker = TesseractWorker & {
-        load: () => Promise<void>;
-        loadLanguage: (lang: string) => Promise<void>;
-        initialize: (lang: string) => Promise<void>;
-        setParameters: (params: Record<string, unknown>) => Promise<void>;
-      };
-      const worker = (await createWorker("fin+swe", undefined, {
-        logger: (m: LoggerMessage) => {
-          if (m.progress !== undefined) setOcrProgress(m.progress);
-        },
-      })) as FullWorker;
-      await worker.load();
-      await worker.loadLanguage("fin+swe");
-      await worker.initialize("fin+swe");
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_BLOCK, // PSM 6
-      });
-      workerRef.current = worker;
-      setWorkerReady(true);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to initialize OCR.";
-      setError(message);
-    }
+    setWorkerReady(true);
   };
 
   const ensureVideoPlaying = async () => {
@@ -191,15 +160,21 @@ export function ScanModal({
       await ensureVideoPlaying();
       const dataUrl = await captureAndProcess(videoRef.current);
 
-      if (!workerRef.current) {
-        await initWorker();
-      }
-      if (!workerRef.current) {
-        throw new Error("OCR worker unavailable.");
-      }
-
+      await initWorker();
       setOcrProgress(0);
-      const result = await workerRef.current.recognize(dataUrl);
+      setProgressStatus("Reading");
+      const result = await recognize(
+        dataUrl,
+        "fin+swe",
+        {
+          logger: (m: LoggerMessage & { status?: string }) => {
+            if (m.progress !== undefined) setOcrProgress(m.progress);
+            if (m.status) setProgressStatus(m.status);
+          },
+          // psm not typed in WorkerOptions, cast to any
+          psm: PSM.SINGLE_BLOCK,
+        } as unknown as Parameters<typeof recognize>[2]
+      );
       const text: string = result?.data?.text || "";
       setOcrText(text);
 
