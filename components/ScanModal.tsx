@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createWorker, PSM, type Worker } from "tesseract.js";
+import {
+  createWorker,
+  PSM,
+  type Worker as TesseractWorker,
+  type LoggerMessage,
+} from "tesseract.js";
 import { matchProduct, normalizeText } from "@/lib/match";
 import type { Product } from "@/lib/products";
 
@@ -33,7 +38,8 @@ export function ScanModal({
 }: ScanModalProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const workerRef = useRef<Worker | null>(null);
+  const workerRef = useRef<TesseractWorker | null>(null);
+  const [workerReady, setWorkerReady] = useState(false);
   const [mode, setMode] = useState<Mode>("camera");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,11 +48,21 @@ export function ScanModal({
   const [kgInput, setKgInput] = useState<string>("");
   const [showText, setShowText] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
+  const [progressStatus, setProgressStatus] = useState("Preparing");
+  const [statusText, setStatusText] = useState(
+    "Hold the label steady inside the frame…"
+  );
+  const rafRef = useRef<number | null>(null);
+  const lastSampleRef = useRef<number>(0);
+  const lastSmallFrameRef = useRef<ImageData | null>(null);
+  const stableSinceRef = useRef<number | null>(null);
+  const scanningLockRef = useRef(false);
+  const cooldownUntilRef = useRef<number>(0);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     if (!open) {
       cleanupStream();
-      terminateWorker();
       resetState();
       return;
     }
@@ -54,7 +70,6 @@ export function ScanModal({
     initWorker();
     return () => {
       cleanupStream();
-      terminateWorker();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -67,6 +82,12 @@ export function ScanModal({
     setSelectedProductId("");
     setKgInput("");
     setShowText(false);
+    setProgressStatus("Preparing");
+    setStatusText("Hold the label steady inside the frame…");
+    setOcrProgress(0);
+    stableSinceRef.current = null;
+    lastSmallFrameRef.current = null;
+    scanningLockRef.current = false;
   };
 
   const cleanupStream = () => {
@@ -100,24 +121,29 @@ export function ScanModal({
   const initWorker = async () => {
     if (workerRef.current) return;
     try {
-      const worker = await createWorker("fin+swe", undefined, {
-        logger: (m) => {
+      type FullWorker = TesseractWorker & {
+        load: () => Promise<void>;
+        loadLanguage: (lang: string) => Promise<void>;
+        initialize: (lang: string) => Promise<void>;
+        setParameters: (params: Record<string, unknown>) => Promise<void>;
+      };
+      const worker = (await createWorker("fin+swe", undefined, {
+        logger: (m: LoggerMessage) => {
           if (m.progress !== undefined) setOcrProgress(m.progress);
         },
-      });
+      })) as FullWorker;
+      await worker.load();
+      await worker.loadLanguage("fin+swe");
+      await worker.initialize("fin+swe");
       await worker.setParameters({
         tessedit_pageseg_mode: PSM.SINGLE_BLOCK, // PSM 6
       });
       workerRef.current = worker;
-    } catch {
-      setError("Failed to initialize OCR.");
-    }
-  };
-
-  const terminateWorker = async () => {
-    if (workerRef.current) {
-      await workerRef.current.terminate();
-      workerRef.current = null;
+      setWorkerReady(true);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to initialize OCR.";
+      setError(message);
     }
   };
 
@@ -184,6 +210,7 @@ export function ScanModal({
       setKgInput(parsedKg ? parsedKg.toString() : "");
 
       setMode("confirm");
+      playBeep();
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Lỗi khi quét. Thử lại.";
@@ -336,6 +363,8 @@ export function ScanModal({
     setMode("camera");
     clearConfirmState();
     setError(null);
+    cooldownUntilRef.current = performance.now() + 800;
+    setStatusText("Hold the label steady inside the frame…");
   };
 
   const handleClose = () => {
@@ -344,7 +373,147 @@ export function ScanModal({
     onClose();
   };
 
+  // Lightweight stability detection loop
+  useEffect(() => {
+    if (!open) return;
+    const sample = () => {
+      const now = performance.now();
+      if (mode !== "camera" || loading) {
+        rafRef.current = requestAnimationFrame(sample);
+        return;
+      }
+      if (now < cooldownUntilRef.current) {
+        setStatusText("Cooling down…");
+        rafRef.current = requestAnimationFrame(sample);
+        return;
+      }
+      if (!videoRef.current) {
+        rafRef.current = requestAnimationFrame(sample);
+        return;
+      }
+      if (now - lastSampleRef.current < 120) {
+        rafRef.current = requestAnimationFrame(sample);
+        return;
+      }
+      lastSampleRef.current = now;
+      const small = sampleSmallFrame(videoRef.current);
+      if (!small) {
+        rafRef.current = requestAnimationFrame(sample);
+        return;
+      }
+      if (!lastSmallFrameRef.current) {
+        lastSmallFrameRef.current = small;
+        rafRef.current = requestAnimationFrame(sample);
+        return;
+      }
+      const diff = frameDiff(lastSmallFrameRef.current, small);
+      lastSmallFrameRef.current = small;
+      const threshold = 12;
+      if (diff < threshold) {
+        if (stableSinceRef.current === null) stableSinceRef.current = now;
+        if (
+          !scanningLockRef.current &&
+          workerReady &&
+          now - (stableSinceRef.current ?? now) > 500
+        ) {
+          scanningLockRef.current = true;
+          setStatusText("Stable — scanning…");
+          handleScan().finally(() => {
+            scanningLockRef.current = false;
+            stableSinceRef.current = null;
+            cooldownUntilRef.current = performance.now() + 800;
+          });
+        }
+      } else {
+        stableSinceRef.current = null;
+        if (!loading) {
+          setStatusText("Hold the label steady inside the frame…");
+        }
+      }
+      rafRef.current = requestAnimationFrame(sample);
+    };
+    rafRef.current = requestAnimationFrame(sample);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      lastSmallFrameRef.current = null;
+      stableSinceRef.current = null;
+      scanningLockRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, mode, loading, workerReady]);
+
   if (!open) return null;
+
+  const sampleSmallFrame = (video: HTMLVideoElement): ImageData | null => {
+    const { videoWidth, videoHeight } = video;
+    if (!videoWidth || !videoHeight) return null;
+    const roiWidth = videoWidth * ROI_WIDTH_RATIO;
+    const roiHeight = videoHeight * ROI_HEIGHT_RATIO;
+    const roiX = (videoWidth - roiWidth) / 2;
+    const roiY = (videoHeight - roiHeight) / 2;
+    const targetW = 200;
+    const scale = targetW / roiWidth;
+    const targetH = Math.max(1, Math.round(roiHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(
+      video,
+      roiX,
+      roiY,
+      roiWidth,
+      roiHeight,
+      0,
+      0,
+      targetW,
+      targetH
+    );
+    return ctx.getImageData(0, 0, targetW, targetH);
+  };
+
+  const frameDiff = (a: ImageData, b: ImageData): number => {
+    if (a.width !== b.width || a.height !== b.height) return Number.MAX_VALUE;
+    const dataA = a.data;
+    const dataB = b.data;
+    let sum = 0;
+    for (let i = 0; i < dataA.length; i += 4) {
+      sum +=
+        Math.abs(dataA[i] - dataB[i]) +
+        Math.abs(dataA[i + 1] - dataB[i + 1]) +
+        Math.abs(dataA[i + 2] - dataB[i + 2]);
+    }
+    return sum / (dataA.length / 4);
+  };
+
+  const playBeep = () => {
+    try {
+      if (!audioCtxRef.current) {
+        const globalAudio = window as unknown as {
+          AudioContext?: typeof AudioContext;
+          webkitAudioContext?: typeof AudioContext;
+        };
+        const Ctx = globalAudio.AudioContext || globalAudio.webkitAudioContext;
+        if (!Ctx) return;
+        audioCtxRef.current = new Ctx();
+      }
+      const ctx = audioCtxRef.current;
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.value = 0.2;
+      osc.connect(gain).connect(ctx.destination);
+      const now = ctx.currentTime;
+      osc.start(now);
+      osc.stop(now + 0.12);
+    } catch {
+      // ignore beep failures
+    }
+  };
 
   const confirmOverlay = (
     <div className="absolute inset-0 bg-gray-950/95 px-4 py-6 overflow-y-auto">
@@ -448,9 +617,7 @@ export function ScanModal({
   const cameraOverlay = (
     <div className="absolute inset-0 flex flex-col justify-between p-4">
       <div>
-        <p className="text-sm text-white/80">
-          Place the label inside the box, then tap Scan.
-        </p>
+        <p className="text-sm text-white/80">{statusText}</p>
         {error && (
           <p className="mt-2 rounded bg-red-600/80 px-3 py-2 text-sm">
             {error}
@@ -465,13 +632,15 @@ export function ScanModal({
           Close
         </button>
         <button
-          className="flex-1 rounded-md bg-emerald-500 px-4 py-3 text-white disabled:bg-emerald-800"
+          className="rounded-md bg-emerald-600 px-4 py-3 text-white disabled:bg-emerald-800"
           onClick={handleScan}
-          disabled={loading}
+          disabled={loading || !workerReady}
         >
           {loading
-            ? `Reading label… ${Math.round(ocrProgress * 100)}%`
-            : "Scan"}
+            ? `${progressStatus}… ${Math.round(ocrProgress * 100)}%`
+            : workerReady
+              ? "Scan now"
+              : "Preparing OCR…"}
         </button>
       </div>
     </div>

@@ -86,7 +86,7 @@ export default function SessionPage() {
 
   const handleManualAdd = () => {
     if (!session) return;
-    const kg = parseFloat(manualKg.replace(",", "."));
+    const kg = parseFloat(manualKg.replace(/,/g, ".").trim());
     if (!manualProductId || !Number.isFinite(kg) || kg <= 0) return;
     const product = PRODUCTS.find((p) => p.id === manualProductId);
     if (!product) return;
@@ -299,7 +299,7 @@ export default function SessionPage() {
                   className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                   value={manualKg}
                   onChange={(e) => setManualKg(e.target.value)}
-                  placeholder="0.000"
+                  placeholder="0.000 (use . or ,)"
                   inputMode="decimal"
                   style={{ fontSize: "16px" }}
                 />
