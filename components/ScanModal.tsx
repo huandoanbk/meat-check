@@ -46,6 +46,7 @@ export function ScanModal({
   const [statusText, setStatusText] = useState(
     "Hold the label steady inside the frame…"
   );
+  const [stability, setStability] = useState(0);
   const rafRef = useRef<number | null>(null);
   const lastSampleRef = useRef<number>(0);
   const lastSmallFrameRef = useRef<ImageData | null>(null);
@@ -53,6 +54,21 @@ export function ScanModal({
   const scanningLockRef = useRef(false);
   const cooldownUntilRef = useRef<number>(0);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const ensureAudioContext = async (): Promise<AudioContext | null> => {
+    const globalAudio = window as unknown as {
+      AudioContext?: typeof AudioContext;
+      webkitAudioContext?: typeof AudioContext;
+    };
+    const Ctx = globalAudio.AudioContext || globalAudio.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new Ctx();
+    }
+    if (audioCtxRef.current.state === "suspended") {
+      await audioCtxRef.current.resume();
+    }
+    return audioCtxRef.current;
+  };
 
   useEffect(() => {
     if (!open) {
@@ -79,6 +95,7 @@ export function ScanModal({
     setProgressStatus("Preparing");
     setStatusText("Hold the label steady inside the frame…");
     setOcrProgress(0);
+    setStability(0);
     stableSinceRef.current = null;
     lastSmallFrameRef.current = null;
     scanningLockRef.current = false;
@@ -185,7 +202,7 @@ export function ScanModal({
       setKgInput(parsedKg ? parsedKg.toString() : "");
 
       setMode("confirm");
-      playBeep();
+      void playBeep();
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Lỗi khi quét. Thử lại.";
@@ -384,6 +401,12 @@ export function ScanModal({
       const diff = frameDiff(lastSmallFrameRef.current, small);
       lastSmallFrameRef.current = small;
       const threshold = 30; // loosened for mobile noise
+       // map diff -> stability %
+      const stabilityPct = Math.max(
+        0,
+        Math.min(100, 100 - (diff / threshold) * 100)
+      );
+      setStability(stabilityPct);
       if (diff < threshold) {
         if (stableSinceRef.current === null) stableSinceRef.current = now;
         if (
@@ -463,18 +486,9 @@ export function ScanModal({
     return sum / (dataA.length / 4);
   };
 
-  const playBeep = () => {
+  const playBeep = async () => {
     try {
-      if (!audioCtxRef.current) {
-        const globalAudio = window as unknown as {
-          AudioContext?: typeof AudioContext;
-          webkitAudioContext?: typeof AudioContext;
-        };
-        const Ctx = globalAudio.AudioContext || globalAudio.webkitAudioContext;
-        if (!Ctx) return;
-        audioCtxRef.current = new Ctx();
-      }
-      const ctx = audioCtxRef.current;
+      const ctx = await ensureAudioContext();
       if (!ctx) return;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -593,6 +607,7 @@ export function ScanModal({
     <div className="absolute inset-0 flex flex-col justify-between p-4">
       <div>
         <p className="text-sm text-white/80">{statusText}</p>
+        <p className="text-xs text-white/70">Stability: {Math.round(stability)}%</p>
         {error && (
           <p className="mt-2 rounded bg-red-600/80 px-3 py-2 text-sm">
             {error}
