@@ -383,13 +383,13 @@ export function ScanModal({
       }
       const diff = frameDiff(lastSmallFrameRef.current, small);
       lastSmallFrameRef.current = small;
-      const threshold = 12;
+      const threshold = 30; // loosened for mobile noise
       if (diff < threshold) {
         if (stableSinceRef.current === null) stableSinceRef.current = now;
         if (
           !scanningLockRef.current &&
           workerReady &&
-          now - (stableSinceRef.current ?? now) > 500
+          now - (stableSinceRef.current ?? now) > 400
         ) {
           scanningLockRef.current = true;
           setStatusText("Stable — scanning…");
